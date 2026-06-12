@@ -74,12 +74,16 @@ export const LibraryGrid: React.FC = () => {
                 ? 'bg-white border-stone-300 text-stone-800' 
                 : 'bg-oled-900 border-oled-700/85 text-neutral-200'
             }`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold font-mono text-xs transition-colors border ${
+              <div className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-bold font-mono text-xs transition-colors border ${
                 isLight 
                   ? 'bg-amber-100 text-amber-800 border-amber-200' 
                   : 'bg-gold-950/20 text-gold-300 border-gold-950/40'
               }`}>
-                {user.avatar}
+                {user.avatar && (user.avatar.startsWith('http://') || user.avatar.startsWith('https://')) ? (
+                  <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+                ) : (
+                  user.avatar
+                )}
               </div>
               <div className="hidden sm:block">
                 <p className={`text-xs font-semibold line-clamp-1 ${isLight ? 'text-stone-800' : 'text-neutral-200'}`}>{user.name}</p>
