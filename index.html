@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" class="dark style-scrollbar">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <!-- SEO Optimization -->
+    <title>Aetheria | Skeuomorphic Daily Journal</title>
+    <meta name="description" content="A premium, dark-mode daily journal app blending a tactile, skeuomorphic book experience with modern digital collaboration, handwriting drawing tools, and reminders." />
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <style>
+      /* Custom dark scrollbar styling */
+      .style-scrollbar::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      .style-scrollbar::-webkit-scrollbar-track {
+        background: #000000;
+      }
+      .style-scrollbar::-webkit-scrollbar-thumb {
+        background: #1a1a1a;
+        border-radius: 4px;
+        border: 2px solid #000000;
+      }
+      .style-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #262626;
+      }
+      body {
+        margin: 0;
+        background-color: #000000;
+        color: #e5e5e5;
+        overflow-x: hidden;
+      }
+    </style>
+  </head>
+  <body class="bg-oled-950 text-neutral-200 antialiased font-sans">
+    <div id="root" class="min-h-screen"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
