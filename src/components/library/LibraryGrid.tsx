@@ -5,6 +5,7 @@ import { BookCard } from './BookCard';
 import { CoverEditor } from './CoverEditor';
 import { ShareModal } from './ShareModal';
 import { Dialog, Button, Input } from '../ui/CustomComponents';
+import { InvitationNotification } from './InvitationNotification';
 import { Plus, Search, FolderOpen, Sun, Moon } from 'lucide-react';
 
 export const LibraryGrid: React.FC = () => {
@@ -137,6 +138,9 @@ export const LibraryGrid: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* Invitation Alerts */}
+      <InvitationNotification />
 
       {/* Library Grid */}
       {filteredBooks.length > 0 ? (

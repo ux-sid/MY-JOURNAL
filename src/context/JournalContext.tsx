@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { db, isFirebaseEnabled } from '../firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, query, where, deleteDoc, getDoc } from 'firebase/firestore';
 
 // Type definitions
 export interface TodoItem {
@@ -47,6 +47,8 @@ export interface BookData {
   sharedWith: Collaborator[];
   pages: PageData[];
   createdAt: string;
+  ownerEmail?: string;
+  sharedWithEmails?: string[];
 }
 
 export interface UserData {
@@ -60,6 +62,20 @@ export interface ReminderItem {
   text: string;
   date: string; // "YYYY-MM-DD"
   completed: boolean;
+}
+
+export interface InvitationItem {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  coverColor: string;
+  coverEmoji: string;
+  ownerEmail: string;
+  ownerName: string;
+  inviteeEmail: string;
+  role: 'view' | 'edit';
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: string;
 }
 
 interface JournalContextType {
@@ -106,6 +122,11 @@ interface JournalContextType {
   // Utilities
   setSearchQuery: (query: string) => void;
   setSidebarOpen: (open: boolean) => void;
+
+  // Invitations
+  invitations: InvitationItem[];
+  acceptInvitation: (inviteId: string) => Promise<void>;
+  rejectInvitation: (inviteId: string) => Promise<void>;
 }
 
 const JournalContext = createContext<JournalContextType | undefined>(undefined);
@@ -278,15 +299,34 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return saved ? JSON.parse(saved) : DEFAULT_REMINDERS;
   });
 
+  const [invitations, setInvitations] = useState<InvitationItem[]>([]);
+
   const setBooks = (newBooks: BookData[] | ((prev: BookData[]) => BookData[])) => {
     _setBooks(prev => {
       const resolved = typeof newBooks === 'function' ? newBooks(prev) : newBooks;
       if (isFirebaseEnabled && db && user && user.email) {
-        const userRef = doc(db, 'users', user.email.toLowerCase());
-        const sanitized = sanitizeForFirestore(resolved);
         setTimeout(() => {
-          setDoc(userRef, { books: sanitized }, { merge: true }).catch(err => {
-            console.error('Error syncing books to Firestore:', err);
+          resolved.forEach(book => {
+            const bookOwner = book.ownerEmail || user.email.toLowerCase();
+            const bookDocRef = doc(db!, 'books', book.id);
+            const sanitized = sanitizeForFirestore({
+              ...book,
+              ownerEmail: bookOwner,
+              sharedWithEmails: book.sharedWithEmails || book.sharedWith.map(s => s.email.toLowerCase())
+            });
+            setDoc(bookDocRef, sanitized).catch(err => {
+              console.error('Error syncing book to Firestore:', err);
+            });
+          });
+
+          // Handle deleted books
+          const resolvedIds = new Set(resolved.map(b => b.id));
+          prev.forEach(oldBook => {
+            if (!resolvedIds.has(oldBook.id)) {
+              deleteDoc(doc(db!, 'books', oldBook.id)).catch(err => {
+                console.error('Error deleting book from Firestore:', err);
+              });
+            }
           });
         }, 0);
       }
@@ -310,7 +350,52 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
   };
 
+  const acceptInvitation = async (inviteId: string) => {
+    if (!isFirebaseEnabled || !db || !user || !user.email) return;
 
+    try {
+      const inviteRef = doc(db!, 'invitations', inviteId);
+      // Update invitation status to accepted
+      await setDoc(inviteRef, { status: 'accepted' }, { merge: true });
+
+      // Fetch the invitation to get the bookId and role
+      const inviteSnap = await getDoc(inviteRef);
+      if (inviteSnap.exists()) {
+        const inviteData = inviteSnap.data() as InvitationItem;
+        const bookId = inviteData.bookId;
+        const role = inviteData.role;
+
+        // Add the user to the book's sharedWith lists
+        const bookRef = doc(db!, 'books', bookId);
+        const bookSnap = await getDoc(bookRef);
+        if (bookSnap.exists()) {
+          const bookData = bookSnap.data() as BookData;
+          const currentShared = bookData.sharedWith || [];
+          const currentEmails = bookData.sharedWithEmails || [];
+
+          // Add invitee if not already there
+          if (!currentEmails.includes(user.email.toLowerCase())) {
+            await setDoc(bookRef, {
+              sharedWithEmails: [...currentEmails, user.email.toLowerCase()],
+              sharedWith: [...currentShared, { email: user.email.toLowerCase(), role }]
+            }, { merge: true });
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error accepting invitation:', err);
+    }
+  };
+
+  const rejectInvitation = async (inviteId: string) => {
+    if (!isFirebaseEnabled || !db) return;
+    try {
+      const inviteRef = doc(db!, 'invitations', inviteId);
+      await setDoc(inviteRef, { status: 'rejected' }, { merge: true });
+    } catch (err) {
+      console.error('Error rejecting invitation:', err);
+    }
+  };
 
   const [user, setUser] = useState<UserData | null>(() => {
     const saved = localStorage.getItem('aetheria_user');
@@ -346,30 +431,97 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!isFirebaseEnabled || !db || !user || !user.email) return;
 
     const userRef = doc(db, 'users', user.email.toLowerCase());
-    const unsubscribe = onSnapshot(userRef, async (docSnap) => {
+    
+    // 1. Subscribe to private user data (reminders)
+    const unsubscribeUser = onSnapshot(userRef, async (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        if (data.books) {
-          _setBooks(data.books);
-        }
         if (data.reminders) {
           _setReminders(data.reminders);
         }
       } else {
-        // Document doesn't exist, seed it with the current local books and reminders
+        // Seed user document with initial reminders
         try {
           await setDoc(userRef, {
-            books: sanitizeForFirestore(books),
             reminders: sanitizeForFirestore(reminders),
             lastUpdated: new Date().toISOString()
           });
+
+          // Seed initial default books to the top-level collection
+          books.forEach(async (book) => {
+            const bookRef = doc(db!, 'books', book.id);
+            await setDoc(bookRef, sanitizeForFirestore({
+              ...book,
+              ownerEmail: user.email.toLowerCase(),
+              sharedWithEmails: book.sharedWithEmails || book.sharedWith.map(s => s.email.toLowerCase())
+            }));
+          });
         } catch (err) {
-          console.error('Error seeding user data to Firestore:', err);
+          console.error('Error seeding initial user data to Firestore:', err);
         }
       }
     });
 
-    return () => unsubscribe();
+    // 2. Subscribe to owned books
+    const qOwned = query(
+      collection(db!, 'books'),
+      where('ownerEmail', '==', user.email.toLowerCase())
+    );
+
+    // 3. Subscribe to shared books
+    const qShared = query(
+      collection(db!, 'books'),
+      where('sharedWithEmails', 'array-contains', user.email.toLowerCase())
+    );
+
+    // 4. Subscribe to pending invitations
+    const qInvites = query(
+      collection(db!, 'invitations'),
+      where('inviteeEmail', '==', user.email.toLowerCase()),
+      where('status', '==', 'pending')
+    );
+
+    let ownedBooksList: BookData[] = [];
+    let sharedBooksList: BookData[] = [];
+
+    const updateCombinedBooks = () => {
+      const combined = [...ownedBooksList];
+      const ownedIds = new Set(combined.map(b => b.id));
+      sharedBooksList.forEach(b => {
+        if (!ownedIds.has(b.id)) {
+          combined.push(b);
+        }
+      });
+      _setBooks(combined);
+    };
+
+    const unsubscribeOwned = onSnapshot(qOwned, (snapshot) => {
+      ownedBooksList = snapshot.docs.map(doc => doc.data() as BookData);
+      updateCombinedBooks();
+    }, (err) => {
+      console.error('Error listening to owned books:', err);
+    });
+
+    const unsubscribeShared = onSnapshot(qShared, (snapshot) => {
+      sharedBooksList = snapshot.docs.map(doc => doc.data() as BookData);
+      updateCombinedBooks();
+    }, (err) => {
+      console.error('Error listening to shared books:', err);
+    });
+
+    const unsubscribeInvites = onSnapshot(qInvites, (snapshot) => {
+      const invites = snapshot.docs.map(doc => doc.data() as InvitationItem);
+      setInvitations(invites);
+    }, (err) => {
+      console.error('Error listening to invitations:', err);
+    });
+
+    return () => {
+      unsubscribeUser();
+      unsubscribeOwned();
+      unsubscribeShared();
+      unsubscribeInvites();
+    };
   }, [user]);
 
   const login = (name: string, email: string, avatar: string) => {
@@ -384,6 +536,7 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setCurrentBookId(null);
     _setBooks(DEFAULT_BOOKS);
     _setReminders(DEFAULT_REMINDERS);
+    setInvitations([]);
   };
 
 
@@ -447,6 +600,30 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       return book;
     }));
+
+    if (isFirebaseEnabled && db && user && user.email) {
+      const book = books.find(b => b.id === id);
+      if (book) {
+        const inviteId = `invite-${id}-${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        const inviteRef = doc(db, 'invitations', inviteId);
+        const inviteData: InvitationItem = {
+          id: inviteId,
+          bookId: id,
+          bookTitle: book.title,
+          coverColor: book.coverColor,
+          coverEmoji: book.coverEmoji,
+          ownerEmail: user.email.toLowerCase(),
+          ownerName: user.name || user.email,
+          inviteeEmail: email.toLowerCase(),
+          role,
+          status: 'pending',
+          createdAt: new Date().toISOString()
+        };
+        setDoc(inviteRef, inviteData).catch(err => {
+          console.error('Error creating database invitation:', err);
+        });
+      }
+    }
   };
 
   const unshareBook = (id: string, email: string) => {
@@ -454,11 +631,19 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (book.id === id) {
         return {
           ...book,
-          sharedWith: book.sharedWith.filter(c => c.email !== email)
+          sharedWith: book.sharedWith.filter(c => c.email !== email),
+          sharedWithEmails: (book.sharedWithEmails || []).filter(e => e !== email.toLowerCase())
         };
       }
       return book;
     }));
+
+    if (isFirebaseEnabled && db) {
+      const inviteId = `invite-${id}-${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      deleteDoc(doc(db, 'invitations', inviteId)).catch(err => {
+        console.error('Error deleting invitation on unshare:', err);
+      });
+    }
   };
 
   // Page action implementations
@@ -617,7 +802,11 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
       deleteReminder,
       
       setSearchQuery,
-      setSidebarOpen
+      setSidebarOpen,
+
+      invitations,
+      acceptInvitation,
+      rejectInvitation
     }}>
       {children}
     </JournalContext.Provider>
