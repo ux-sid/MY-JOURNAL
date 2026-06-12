@@ -134,6 +134,25 @@ const formatInitialDate = (dateStr: string) => {
   });
 };
 
+// Helper to recursively remove undefined values from objects/arrays for Firestore compatibility
+const sanitizeForFirestore = (obj: any): any => {
+  if (obj === undefined) return null;
+  if (obj === null) return null;
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizeForFirestore);
+  }
+  if (typeof obj === 'object') {
+    const sanitized: any = {};
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key) && obj[key] !== undefined) {
+        sanitized[key] = sanitizeForFirestore(obj[key]);
+      }
+    }
+    return sanitized;
+  }
+  return obj;
+};
+
 // Create a blank daily template page
 const createEmptyPage = (dateString: string, templateType: 'daily' | 'blank' = 'daily'): PageData => {
   return {
@@ -259,15 +278,17 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return saved ? JSON.parse(saved) : DEFAULT_REMINDERS;
   });
 
-  // Custom setter wrappers that sync to Firestore if online
   const setBooks = (newBooks: BookData[] | ((prev: BookData[]) => BookData[])) => {
     _setBooks(prev => {
       const resolved = typeof newBooks === 'function' ? newBooks(prev) : newBooks;
       if (isFirebaseEnabled && db && user && user.email) {
         const userRef = doc(db, 'users', user.email.toLowerCase());
-        setDoc(userRef, { books: resolved }, { merge: true }).catch(err => {
-          console.error('Error syncing books to Firestore:', err);
-        });
+        const sanitized = sanitizeForFirestore(resolved);
+        setTimeout(() => {
+          setDoc(userRef, { books: sanitized }, { merge: true }).catch(err => {
+            console.error('Error syncing books to Firestore:', err);
+          });
+        }, 0);
       }
       return resolved;
     });
@@ -278,13 +299,17 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const resolved = typeof newReminders === 'function' ? newReminders(prev) : newReminders;
       if (isFirebaseEnabled && db && user && user.email) {
         const userRef = doc(db, 'users', user.email.toLowerCase());
-        setDoc(userRef, { reminders: resolved }, { merge: true }).catch(err => {
-          console.error('Error syncing reminders to Firestore:', err);
-        });
+        const sanitized = sanitizeForFirestore(resolved);
+        setTimeout(() => {
+          setDoc(userRef, { reminders: sanitized }, { merge: true }).catch(err => {
+            console.error('Error syncing reminders to Firestore:', err);
+          });
+        }, 0);
       }
       return resolved;
     });
   };
+
 
 
   const [user, setUser] = useState<UserData | null>(() => {
@@ -334,8 +359,8 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
         // Document doesn't exist, seed it with the current local books and reminders
         try {
           await setDoc(userRef, {
-            books,
-            reminders,
+            books: sanitizeForFirestore(books),
+            reminders: sanitizeForFirestore(reminders),
             lastUpdated: new Date().toISOString()
           });
         } catch (err) {
