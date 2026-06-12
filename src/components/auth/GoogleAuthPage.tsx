@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useJournal } from '../../context/JournalContext';
 import { Button } from '../ui/CustomComponents';
 import { ShieldCheck, Loader2 } from 'lucide-react';
+import { auth, googleProvider, isFirebaseEnabled } from '../../firebase';
+import { signInWithPopup } from 'firebase/auth';
 
 export const GoogleAuthPage: React.FC = () => {
   const { login } = useJournal();
@@ -28,6 +30,30 @@ export const GoogleAuthPage: React.FC = () => {
     }, 1500);
   };
 
+  const handleGoogleSignIn = async () => {
+    if (!isFirebaseEnabled || !auth || !googleProvider) {
+      setShowAccountSelector(true);
+      return;
+    }
+
+    setIsLoggingIn(true);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      if (user) {
+        const name = user.displayName || 'Google User';
+        const email = user.email || '';
+        const avatar = user.photoURL || (name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'G');
+        login(name, email, avatar);
+      }
+    } catch (error) {
+      console.error('Google sign-in error:', error);
+      alert('Google Sign-In failed. Please verify your Firebase configuration and domain settings.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
   const handleCustomLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customName.trim() || !customEmail.trim()) return;
@@ -43,6 +69,7 @@ export const GoogleAuthPage: React.FC = () => {
       setIsLoggingIn(false);
     }, 1500);
   };
+
 
   return (
     <div className="min-h-screen bg-oled-950 flex flex-col justify-center items-center px-4 relative overflow-hidden select-none">
@@ -82,7 +109,7 @@ export const GoogleAuthPage: React.FC = () => {
             {/* Login CTA */}
             <div className="pt-4 space-y-4">
               <button
-                onClick={() => setShowAccountSelector(true)}
+                onClick={handleGoogleSignIn}
                 className="w-full flex items-center justify-center gap-3 bg-white hover:bg-neutral-100 text-neutral-900 font-sans font-semibold py-3 px-4 rounded-xl shadow-md transition-all duration-200 active:scale-[0.98]"
               >
                 {/* Embedded SVG Google Icon */}
@@ -111,7 +138,7 @@ export const GoogleAuthPage: React.FC = () => {
             {/* Footer lock indicator */}
             <div className="flex items-center justify-center gap-1.5 text-[10px] text-neutral-500 font-mono tracking-wider pt-2 select-none">
               <ShieldCheck size={12} className="text-gold-500/60" />
-              <span>SECURE MOCK END-TO-END AUTH</span>
+              <span>{isFirebaseEnabled ? 'SECURE GOOGLE AUTHENTICATION' : 'SECURE MOCK END-TO-END AUTH'}</span>
             </div>
           </div>
         ) : isLoggingIn ? (

@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { db, isFirebaseEnabled } from '../firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 // Type definitions
 export interface TodoItem {
@@ -236,7 +238,7 @@ const DEFAULT_REMINDERS: ReminderItem[] = [
 ];
 
 export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [books, setBooks] = useState<BookData[]>(() => {
+  const [books, _setBooks] = useState<BookData[]>(() => {
     const saved = localStorage.getItem('aetheria_journals');
     const initialBooks: BookData[] = saved ? JSON.parse(saved) : DEFAULT_BOOKS;
     
@@ -252,10 +254,38 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }));
   });
 
-  const [reminders, setReminders] = useState<ReminderItem[]>(() => {
+  const [reminders, _setReminders] = useState<ReminderItem[]>(() => {
     const saved = localStorage.getItem('aetheria_reminders');
     return saved ? JSON.parse(saved) : DEFAULT_REMINDERS;
   });
+
+  // Custom setter wrappers that sync to Firestore if online
+  const setBooks = (newBooks: BookData[] | ((prev: BookData[]) => BookData[])) => {
+    _setBooks(prev => {
+      const resolved = typeof newBooks === 'function' ? newBooks(prev) : newBooks;
+      if (isFirebaseEnabled && db && user && user.email) {
+        const userRef = doc(db, 'users', user.email.toLowerCase());
+        setDoc(userRef, { books: resolved }, { merge: true }).catch(err => {
+          console.error('Error syncing books to Firestore:', err);
+        });
+      }
+      return resolved;
+    });
+  };
+
+  const setReminders = (newReminders: ReminderItem[] | ((prev: ReminderItem[]) => ReminderItem[])) => {
+    _setReminders(prev => {
+      const resolved = typeof newReminders === 'function' ? newReminders(prev) : newReminders;
+      if (isFirebaseEnabled && db && user && user.email) {
+        const userRef = doc(db, 'users', user.email.toLowerCase());
+        setDoc(userRef, { reminders: resolved }, { merge: true }).catch(err => {
+          console.error('Error syncing reminders to Firestore:', err);
+        });
+      }
+      return resolved;
+    });
+  };
+
 
   const [user, setUser] = useState<UserData | null>(() => {
     const saved = localStorage.getItem('aetheria_user');
@@ -286,6 +316,37 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     localStorage.setItem('aetheria_reminders', JSON.stringify(reminders));
   }, [reminders]);
 
+  // Firestore real-time listener
+  useEffect(() => {
+    if (!isFirebaseEnabled || !db || !user || !user.email) return;
+
+    const userRef = doc(db, 'users', user.email.toLowerCase());
+    const unsubscribe = onSnapshot(userRef, async (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.books) {
+          _setBooks(data.books);
+        }
+        if (data.reminders) {
+          _setReminders(data.reminders);
+        }
+      } else {
+        // Document doesn't exist, seed it with the current local books and reminders
+        try {
+          await setDoc(userRef, {
+            books,
+            reminders,
+            lastUpdated: new Date().toISOString()
+          });
+        } catch (err) {
+          console.error('Error seeding user data to Firestore:', err);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
   const login = (name: string, email: string, avatar: string) => {
     const userData = { name, email, avatar };
     setUser(userData);
@@ -296,7 +357,10 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setUser(null);
     localStorage.removeItem('aetheria_user');
     setCurrentBookId(null);
+    _setBooks(DEFAULT_BOOKS);
+    _setReminders(DEFAULT_REMINDERS);
   };
+
 
   const togglePageTheme = () => {
     setPageTheme(prev => {
